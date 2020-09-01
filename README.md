@@ -7,6 +7,8 @@ Server side for esp32
 - Shallow structure is so that multiple users can have a esp32 vice versa
 - Easier to get all the esp32 ip_addr at once too
 
+[Read more over here](https://firebase.google.com/docs/firestore/data-model)
+
 ```
 database
 	|-plot_to_users
