@@ -7,6 +7,9 @@ def main():
     # Load environment variables
     load_dotenv()
 
+    # Set time zone
+    time.tzset()
+
     # Connect to firebase
     storage, db = db_setup("plant-e")      # change plant-e to new firebase name
 
