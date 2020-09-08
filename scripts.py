@@ -1,13 +1,15 @@
 """ This file is to contain all the scripts to import over """
 import datetime
 import os
-import pyrebase
 import requests
 import time
 from io import BytesIO
 from PIL import Image
+import firebase_admin
+from firebase_admin import credentials, firestore, storage
 
 tz = datetime.timezone(datetime.timedelta(hours=8)) # can add name="SGT" to change %Z from UTC+0800 to SGT
+
 
 def db_setup(projectid):
 	""" Setup firebase connection
@@ -16,43 +18,30 @@ def db_setup(projectid):
 		user --> user object, access userid by: user["idToken"]
 		database --> Firebase data object to get/set from
 	"""
-	dburl = "https://" + projectid + ".firebaseio.com"
-	authdomain = projectid + ".firebaseio.com"
-	apikey = os.environ.get("API_KEY")
 	
-	config = {
-		"apiKey": apikey,
-		"authDomain": authdomain,
-		"databaseURL": dburl,
-		"storageBucket": "plant-e.appspot.com",  # TODO
-		"serviceAccount": "path/to/serviceAccountCredentials.json"  # TODO
-	}
-	# Create a firebase object by specifying the URL of the database and its secret token.
-	# The firebase object has functions put and get, that allows user to put data onto
-	# the database and also retrieve data from the database.
+	# Can remove apikey when not needed
+	apikey = os.environ.get("API_KEY")
+	private = os.environ.get("PRIVATE_KEY")
+	
+	# Use a service account
+	cred = credentials.Certificate(private)
+	firebase_admin.initialize_app(cred, {'storageBucket': 'plant-e-fc09e.appspot.com'})
 
-	firebase = pyrebase.initialize_app(config)
-	# auth = firebase.auth()
-	# admin = auth.sign_in_with_email_and_password(email, password)
-
-	return firebase.storage(), firebase.database()
+	return storage.bucket(), firestore.client()
 
 
 def get_plant(db):
 	""" gets plant address from database
 
-		Variables:
-		device_id_dict --> {device_id: {"ip_addr": 202.166.133.236, "user_id": 23, "plot_id": 1}, device_id: {...}, ...}
-		
 		Returns:
 		addr_list --> [(ip_addr, user_id), (ip_addr, user_id), ...]
 	"""
-	device_id_dict = db.child("esp32").get().val()
+	all_esp = db.collection('esp32').stream()
 	addr_list = []
-
-	for values in device_id_dict.values():
-		ip_address = values.get("ip_addr")
-		user_id = values.get("user_id")
+	for esp in all_esp:
+		esp_dict = esp.to_dict()
+		ip_address = esp_dict.get("ip_addr")
+		user_id = esp_dict.get("user_id")
 		addr = (ip_address, user_id)
 		addr_list.append(addr)
 
@@ -70,15 +59,15 @@ def get_image(addr):
 	"""
 	for i in range(5):
 		result = requests.get(addr, stream=True)
-		if result.status_code != 200 and i == 5:
+		if result.status_code == 200:
+			# Save image
+			image = Image.open(result.raw)
+			break
+		elif i == 4:
 			# TODO logging
 			image = Image.new("RGB", (n, m))
-			break
-		else:
-			image = Image.open(BytesIO(result.content))
-			break
 
-	image_path = datetime.datetime.now(tz).strftime("%y%d%m_%H%M%S_%f") + ".png"
+	image_path = datetime.datetime.now(tz).strftime("%y%m%d_%H%M%S_%f") + ".png"
 	image.save(image_path)
 
 	return image_path
@@ -87,8 +76,16 @@ def get_image(addr):
 def store(db, storage, image_path, user_id):
 	""" Sends image to the database """
 	
-	daymonthyear = datetime.datetime.strptime(image_path[:-4], "%y%d%m_%H%M%S_%f").strftime("%d%m%y")
+	date = datetime.datetime.strptime(image_path[:-4], "%y%m%d_%H%M%S_%f").strftime("%Y-%m-%d")
 
-	storage.child("images/" + image_path).put(image_path)
-	img_url = storage.child("images/" + image_path).get_url()
-	db.child("journals").child(user_id).child(daymonthyear).child("image_url").set(img_url)
+	blob = storage.blob("images/" + image_path)
+	blob.upload_from_filename(image_path)
+	img_url = blob.public_url
+
+	# storage.child("images/" + image_path).put(image_path)
+	# img_url = storage.child("images/" + image_path).get_url()
+
+	journal_day = {'title': None, 'datetime': None, 'image_url': img_url, 'text': None}
+
+	# Save img_url to firestore
+	db.collection("journals").document(user_id).collection('date').document(date).set(journal_day)
